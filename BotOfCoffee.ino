@@ -6,25 +6,24 @@
 #include <Twitter.h>
 
 // Enter a MAC address for your controller below.
-// Newer Ethernet shields have a MAC address printed on a sticker on the shield
-byte mac[] = {  
-  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
 unsigned int localPort = 8888;      // local port to listen for UDP packets
 
+// time server
 IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov NTP server
-
 const int NTP_PACKET_SIZE= 48; // NTP time stamp is in the first 48 bytes of the message
-
 byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets 
+int timeZoneOffSet = 5;
 
 // A UDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
 
-int timeZoneOffSet = 5;
-
 // Your Token to Tweet (get it from http://arduino-tweet.appspot.com/)
 Twitter twitter("");
+
+// 10 second refresh interval
+int delayInterval = 10000;
 
 void setup() 
 {
@@ -33,7 +32,6 @@ void setup()
    while (!Serial) {
     ; // wait for serial port to connect. Needed for Leonardo only
   }
-
 
   // start Ethernet and UDP
   if (Ethernet.begin(mac) == 0) {
@@ -46,7 +44,8 @@ void setup()
   
   sendNTPpacket(timeServer); // send an NTP packet to a time server
 
-    // wait to see if a reply is available
+  // wait to see if a reply is available
+  // set current time
   delay(1000);  
   if ( Udp.parsePacket() ) {  
     // We've received a packet, read the data from it
@@ -69,17 +68,18 @@ void setup()
     setTime(epoch);
   }
   
+  // initial tweet of reboot
   tweet("I'm being programmed! @BotOfCoffee has rebooted.");
 }
 
 void loop()
 {
-
+  // serial print current time
   Serial.print("Current Time is ");
   Serial.println(getTimeString());
   
   // wait ten seconds before asking for the time again
-  delay(10000); 
+  delay(delayInterval); 
 }
 
 bool tweet(String message){ 
@@ -106,7 +106,7 @@ bool tweet(String message){
   return false;
 }
 
-// time formatting could be improved
+// DD/MM/YYYY HH:MM:SS AM/PM
 String getTimeString() {
   String time = "";
   time += month();
@@ -145,24 +145,6 @@ String getTimeString() {
   }
   
   return time;
-}
-
-void getUTC(unsigned long epoch){
-  // print the hour, minute and second:
-  Serial.print("UTC time is ");       // UTC is the time at Greenwich Meridian (GMT)
-  Serial.print((epoch  % 86400L) / 3600); // print the hour (86400 equals secs per day)
-  Serial.print(':');  
-  if ( ((epoch % 3600) / 60) < 10 ) {
-    // In the first 10 minutes of each hour, we'll want a leading '0'
-    Serial.print('0');
-  }
-  Serial.print((epoch  % 3600) / 60); // print the minute (3600 equals secs per minute)
-  Serial.print(':'); 
-  if ( (epoch % 60) < 10 ) {
-    // In the first 10 seconds of each minute, we'll want a leading '0'
-    Serial.print('0');
-  }
-  Serial.println(epoch %60); // print the second 
 }
 
 // send an NTP request to the time server at the given address 
