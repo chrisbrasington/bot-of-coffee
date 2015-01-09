@@ -1,137 +1,200 @@
-#include <SPI.h> // needed in Arduino 0019 or later
+#include <SPI.h>         
 #include <Ethernet.h>
-#include <Twitter.h>
+#include <EthernetUdp.h>
 #include <Time.h>
-/*
-#include <UdpBytewise.h>  // UDP library from: bjoern@cs.stanford.edu 12/30/2008 
-#if  UDP_TX_PACKET_MAX_SIZE <64 ||  UDP_RX_PACKET_MAX_SIZE < 64
-#error : UDP packet size to small - modify UdpBytewise.h to set buffers to 64 bytes
-#endif
-*/
+#include <String>
+#include <Twitter.h>
 
-// Ethernet Shield Settings
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+// Enter a MAC address for your controller below.
+// Newer Ethernet shields have a MAC address printed on a sticker on the shield
+byte mac[] = {  
+  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 
-// If you don't specify the IP address, DHCP is used
-byte ip[] = { 192, 168, 11, 250 };
+unsigned int localPort = 8888;      // local port to listen for UDP packets
+
+IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov NTP server
+
+const int NTP_PACKET_SIZE= 48; // NTP time stamp is in the first 48 bytes of the message
+
+byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets 
+
+// A UDP instance to let us send and receive packets over UDP
+EthernetUDP Udp;
+
+int timeZoneOffSet = 5;
 
 // Your Token to Tweet (get it from http://arduino-tweet.appspot.com/)
 Twitter twitter("");
 
-// Message to post
-//char msg[] = "Hello, World! I'm @BotOfCoffee Arduino!";
-
-byte SNTP_server_IP[]    = { 192, 43, 244, 18}; // time.nist.gov
-time_t prevDisplay = 0; // when the digital clock was displayed
-const  long timeZoneOffset = 0L; // set this to the offset in seconds to your local time;
-
-void setup()
+void setup() 
 {
-  delay(1000);
-  Ethernet.begin(mac, ip);
-
+ // Open serial communications and wait for port to open:
   Serial.begin(9600);
-  Serial.println("connecting ...");
-  
-  Serial.println(year());
-  
-  /*
-  if (twitter.post(msg)) {
-    // Specify &Serial to output received response to Serial.
-    // If no output is required, you can just omit the argument, e.g.
-    // int status = twitter.wait();
-    int status = twitter.wait(&Serial);
-    if (status == 200) {
-      Serial.println("OK.");
-    } else {
-      Serial.print("failed : code ");
-      Serial.println(status);
-    }
-  } else {
-    Serial.println("connection failed.");
+   while (!Serial) {
+    ; // wait for serial port to connect. Needed for Leonardo only
   }
-  */
+
+
+  // start Ethernet and UDP
+  if (Ethernet.begin(mac) == 0) {
+    Serial.println("Failed to configure Ethernet using DHCP");
+    // no point in carrying on, so do nothing forevermore:
+    for(;;)
+      ;
+  }
+  Udp.begin(localPort);
   
-  setSyncProvider(getNtpTime);
-  while(timeStatus()== timeNotSet)   
-     ; // wait until the time is set by the sync provider
+  sendNTPpacket(timeServer); // send an NTP packet to a time server
+
+    // wait to see if a reply is available
+  delay(1000);  
+  if ( Udp.parsePacket() ) {  
+    // We've received a packet, read the data from it
+    Udp.read(packetBuffer,NTP_PACKET_SIZE);  // read the packet into the buffer
+
+    //the timestamp starts at byte 40 of the received packet and is four bytes,
+    // or two words, long. First, esxtract the two words:
+
+    unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+    unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);  
+    // combine the four bytes (two words) into a long integer
+    // this is NTP time (seconds since Jan 1 1900):
+    unsigned long secsSince1900 = highWord << 16 | lowWord;            
+
+    // now convert NTP time into everyday time:
+    // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
+    const unsigned long seventyYears = 2208988800UL;     
+    // subtract seventy years:
+    unsigned long epoch = secsSince1900 - seventyYears;                        
+    setTime(epoch);
+  }
+  
+  tweet("I'm being programmed! @BotOfCoffee has rebooted.");
 }
 
 void loop()
 {
-  if( now() != prevDisplay) //update the display only if the time has changed
-  {
-    prevDisplay = now();
-    digitalClockDisplay();  
+
+  Serial.print("Current Time is ");
+  Serial.println(getTimeString());
+  
+  // wait ten seconds before asking for the time again
+  delay(10000); 
+}
+
+bool tweet(String message){ 
+  Serial.println("Tweeting message: ");
+  Serial.println(message);
+  
+  message += " " + getTimeString();
+  
+  if (twitter.post(message.c_str())) {
+  // Specify &Serial to output received response to Serial.
+  // If no output is required, you can just omit the argument, e.g.
+  // int status = twitter.wait();
+  int status = twitter.wait(&Serial);
+  if (status == 200) {
+    Serial.println("OK.");
+    return true;
+  } else {
+    Serial.print("failed : code ");
+    Serial.println(status);
   }
+  } else {
+  Serial.println("connection failed.");
+  }
+  return false;
 }
 
-void digitalClockDisplay(){
-  // digital clock display of the time
-  Serial.print(hour());
-  printDigits(minute());
-  printDigits(second());
-  Serial.print(" ");
-  Serial.print(day());
-  Serial.print(" ");
-  Serial.print(month());
-  Serial.print(" ");
-  Serial.print(year()); 
-  Serial.println(); 
+// time formatting could be improved
+String getTimeString() {
+  String time = "";
+  time += month();
+  time += "/";
+  time += day();
+  time += "/";
+  time += year();
+  time += " ";
+  
+  unsigned long epoch = now();
+  
+  // hours
+  time += (((epoch  % 86400L) / 3600)+timeZoneOffSet)%12;
+  time += ":";
+  
+  // minutes
+  if ( ((epoch % 3600) / 60) < 10 ) {
+    // In the first 10 minutes of each hour, we'll want a leading '0'
+    time += "0";
+  }
+  time += (epoch  % 3600) / 60;
+  time += ":";
+  
+  // seconds
+  if ( (epoch % 60) < 10 ) {
+    // In the first 10 seconds of each minute, we'll want a leading '0'
+    time += "0";
+  }
+  time += epoch %60;
+  
+  if(isAM()) {
+    time += " AM";
+  }
+  else {
+    time += " PM";
+  }
+  
+  return time;
 }
 
-void printDigits(int digits){
-  // utility function for digital clock display: prints preceding colon and leading 0
-  Serial.print(":");
-  if(digits < 10)
+void getUTC(unsigned long epoch){
+  // print the hour, minute and second:
+  Serial.print("UTC time is ");       // UTC is the time at Greenwich Meridian (GMT)
+  Serial.print((epoch  % 86400L) / 3600); // print the hour (86400 equals secs per day)
+  Serial.print(':');  
+  if ( ((epoch % 3600) / 60) < 10 ) {
+    // In the first 10 minutes of each hour, we'll want a leading '0'
     Serial.print('0');
-  Serial.print(digits);
-}
-
-/*-------- NTP code ----------*/
-
-unsigned long getNtpTime()
-{
-  sendNTPpacket(SNTP_server_IP);
-  delay(1000);
-  if ( UdpBytewise.available() ) {
-    for(int i=0; i < 40; i++)
-       UdpBytewise.read(); // ignore every field except the time
-    const unsigned long seventy_years = 2208988800UL + timeZoneOffset;        
-    return getUlong() -  seventy_years;      
   }
-  return 0; // return 0 if unable to get the time
+  Serial.print((epoch  % 3600) / 60); // print the minute (3600 equals secs per minute)
+  Serial.print(':'); 
+  if ( (epoch % 60) < 10 ) {
+    // In the first 10 seconds of each minute, we'll want a leading '0'
+    Serial.print('0');
+  }
+  Serial.println(epoch %60); // print the second 
 }
 
-unsigned long sendNTPpacket(byte *address)
+// send an NTP request to the time server at the given address 
+unsigned long sendNTPpacket(IPAddress& address)
 {
-  UdpBytewise.begin(123);
-  UdpBytewise.beginPacket(address, 123);
-  UdpBytewise.write(B11100011);   // LI, Version, Mode
-  UdpBytewise.write(0);    // Stratum
-  UdpBytewise.write(6);  // Polling Interval
-  UdpBytewise.write(0xEC); // Peer Clock Precision
-  write_n(0, 8);    // Root Delay & Root Dispersion
-  UdpBytewise.write(49); 
-  UdpBytewise.write(0x4E);
-  UdpBytewise.write(49);
-  UdpBytewise.write(52);
-  write_n(0, 32); //Reference and time stamps  
-  UdpBytewise.endPacket();   
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE); 
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49; 
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp: 		   
+  Udp.beginPacket(address, 123); //NTP requests are to port 123
+  Udp.write(packetBuffer,NTP_PACKET_SIZE);
+  Udp.endPacket(); 
 }
 
-unsigned long getUlong()
-{
-    unsigned long ulong = (unsigned long)UdpBytewise.read() << 24;
-    ulong |= (unsigned long)UdpBytewise.read() << 16;
-    ulong |= (unsigned long)UdpBytewise.read() << 8;
-    ulong |= (unsigned long)UdpBytewise.read();
-    return ulong;
-}
 
-void write_n(int what, int how_many)
-{
-  for( int i = 0; i < how_many; i++ )
-    UdpBytewise.write(what);
-}
+
+
+
+
+
+
+
 
