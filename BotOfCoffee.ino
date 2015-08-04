@@ -2,8 +2,9 @@
 #include <Ethernet.h>
 #include <EthernetUdp.h>
 #include <Time.h>
-#include <String.h>
 #include <Twitter.h>
+
+long lastAttemptTime = 0;
 
 // Enter a MAC address for your controller below.
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
@@ -14,16 +15,24 @@ unsigned int localPort = 8888;      // local port to listen for UDP packets
 IPAddress timeServer(132, 163, 4, 101); // time-a.timefreq.bldrdoc.gov NTP server
 const int NTP_PACKET_SIZE= 48; // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets 
-int timeZoneOffSet = 5;
+int timeZoneOffSet = 6;
 
 // A UDP instance to let us send and receive packets over UDP
 EthernetUDP Udp;
+
+EthernetClient client;
 
 // Your Token to Tweet (get it from http://arduino-tweet.appspot.com/)
 Twitter twitter("");
 
 // 10 second refresh interval
-int delayInterval = 10000;
+const int requestInterval = 10000;  // delay between requests 10000ms = 10sec
+
+char serverName[] = "api.twitter.com";  // twitter URL
+char twitterName[] = "GET /1/statuses/user_timeline.xml?screen_name=botofcoffee&count=1 HTTP/1.1";//"GET /1/statuses/user_timeline.xml?screen_name=[YOUR TWITTER @NAME HERE}&count=1 HTTP/1.1";
+char tweetMessage[150] = "";
+char currentLine[256] = "";
+boolean readingTweet = false;
 
 // DD/MM/YYYY HH:MM:SS AM/PM
 String getTimeString() {
@@ -96,6 +105,9 @@ bool tweet(String message){
 
   message += " " + getTimeString();
 
+  Serial.println(message);
+  return true;
+  /*
   if (twitter.post(message.c_str())) {
     // Specify &Serial to output received response to Serial.
     // If no output is required, you can just omit the argument, e.g.
@@ -112,15 +124,77 @@ bool tweet(String message){
     Serial.println("connection failed.");
   }
   return false;
+   */
 }
 
+bool connectToServer() {
+  // attempt to connect, and wait a millisecond:
+  Serial.println("connecting to server...");
+  if (client.connect(serverName, 80)) {
+    Serial.println("making HTTP request...");
+    // make HTTP GET request to twitter:
+    client.println(twitterName);
+    client.println("HOST: api.twitter.com");
+    client.println();
+
+    lastAttemptTime = millis();
+    return true;
+  }
+  return false;
+}
+
+void getTwitterData(){
+  Serial.println("Get Twitter Data..");
+
+  if (client.connected()) {
+    Serial.println("Client Connected");
+    if (client.available()) {
+      // read incoming bytes:
+      char inChar = client.read();
+      Serial.print(inChar);
+    }
+    else {
+      Serial.println("Not avaliable");
+    }
+
+    Serial.println();
+    //client.stop();
+  }
+  else if (millis() - lastAttemptTime > requestInterval) {
+    // if you're not connected, and two minutes have passed since
+    // your last connection, then attempt to connect again:
+    connectToServer();
+  }
+  else {
+    Serial.println("Client Not Connected");
+  }
+}
+
+void TwitterListenerSetup()
+{
+  if(connectToServer()) {
+    Serial.println("Twitter API Connection successful");
+    getTwitterData();
+  }
+  else {
+    Serial.println("Twitter API Connection failed");
+  }
+
+
+
+
+
+
+
+}
 void setup()
 {
   // Open serial communications and wait for port to open:
   Serial.begin(9600);
-  while (!Serial) {
-    ; // wait for serial port to connect. Needed for Leonardo only
-  }
+  //while (!Serial) {
+  //  ; // wait for serial port to connect. Needed for Leonardo only
+  //}
+  Serial.println("Running program...");
 
   // start Ethernet and UDP
   if (Ethernet.begin(mac) == 0) {
@@ -158,8 +232,13 @@ void setup()
   }
 
   // initial tweet of reboot
-  tweet("I'm being programmed! @BotOfCoffee has rebooted.");
+  //tweet("I'm being programmed! @BotOfCoffee has rebooted.");
+
+  //response.reserve(150);
+  TwitterListenerSetup();
 }
+
+
 
 void loop()
 {
@@ -168,7 +247,8 @@ void loop()
   Serial.println(getTimeString());
 
   // wait ten seconds before asking for the time again
-  delay(delayInterval);
+  delay(requestInterval);
+
 }
 
 
